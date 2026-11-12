@@ -1,0 +1,16 @@
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+
+data/
+*:Zone.Identifier
+
+# notebook output artifacts (plans and code stay tracked)
+results/
+exports/
+cache/
+*.npz
+*.zip
