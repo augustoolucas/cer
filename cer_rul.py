@@ -31,6 +31,12 @@ Metrics (group D)
     ``scaled_prediction_to_units``, ``fold_metric_rows``,
     ``aggregate_metric_rows``
 
+Dataset profiles (declarative, fresh copy per call)
+    ``get_dataset_profile`` for ``'gerador'`` and ``'gearbox'``
+
+Preprocessing (learned in ``fit`` on training rows only)
+    ``TabularPreprocessor``, ``signed_log1p``, ``PREPROCESSING_OPTIONS``
+
 Protocol constants are module defaults only. Every function that depends on
 protocol values also accepts them as explicit keyword arguments, so a
 notebook can pass its own values without mutating any module state.
@@ -63,6 +69,7 @@ Upload this file and import it::
 The upload cell may need to be re-run after a Colab runtime restart.
 """
 
+import copy
 from types import MappingProxyType
 
 import numpy as np
@@ -133,6 +140,103 @@ _DEFAULT_LABEL_META = {
     "unit": "unidade", "max_allowed": np.inf,
 }
 
+# Gearbox dataset (independent CSV; never merged with the generator CSV).
+# Its FPT dates were inferred from linear labels and are not physically verified.
+GEARBOX_SENSOR_COLUMNS = (
+    "g_1_Meanfreq",
+    "v_1_Centerfreq",
+    "g_0_Peak_peak",
+    "g_0_RMS",
+    "g_0_Variance",
+    "v_1_Rmsfreq",
+    "e_HS-S-RS (GBX)_BSF_2X|NCF 2232 ECN1JB/L4BC3",
+    "e_HS-S-GS (GBX) (Pista dupla)_BPFI_2X|BT2-0246 C/L4BPEX",
+)
+GEARBOX_EQUIPMENT_GROUPS = MappingProxyType({
+    "E1": (1, 2, 3, 4, 5, 6),
+    "E2": (7, 8, 9, 10, 11, 12),
+    "E3": (13, 14, 15, 16, 17, 18),
+})
+GEARBOX_MEASUREMENT_NAMES = (
+    "HSS-Radial", "HSS-Axial", "IMS", "LSS", "Planetária 0°", "Planetária 90°",
+)
+GEARBOX_FPT_ANNOTATIONS = MappingProxyType({
+    **{fault_id: "2023-06-14" for fault_id in range(1, 7)},
+    **{fault_id: "2022-11-01" for fault_id in range(7, 13)},
+    **{fault_id: "2023-08-13" for fault_id in range(13, 19)},
+})
+
+_GERADOR_FPT_NOTE = (
+    "Datas herdadas da célula 19 de RUL_CMS_TCN.ipynb, usadas apenas em "
+    "relatório de fase e pesos opcionais de treino. Não foram verificadas "
+    "fisicamente de forma independente."
+)
+_GEARBOX_FPT_NOTE = (
+    "Datas de FPT do gearbox inferidas da rotulagem linear (RUL) dos eventos "
+    "E1=2023-06-14, E2=2022-11-01 e E3=2023-08-13; não foram verificadas "
+    "fisicamente de forma independente. Usadas apenas em relatório de fase e "
+    "pesos opcionais de treino, nunca como features de inferência."
+)
+
+
+def _porcentagem_label(filename):
+    return {"porcentagem-data": {"filename": filename,
+                                 **dict(LABEL_META["porcentagem-data"])}}
+
+
+_DATASET_PROFILES = {
+    "gerador": {
+        "dataset_id": "gerador",
+        "unit_kind": "equipment",
+        "sensor_columns": tuple(SENSOR_COLUMNS),
+        "equipment_groups": {name: tuple(ids) for name, ids in EQUIPMENT_GROUPS.items()},
+        "measurement_by_id": {fault_id: "gerador" for fault_id in FAULT_IDS},
+        "fpt_annotations": {int(fault_id): date for fault_id, date
+                            in FPT_ANNOTATIONS.items()},
+        "fpt_note": _GERADOR_FPT_NOTE,
+        "labels": _porcentagem_label("Features_gerador_score_RUL-porcentagem-data.csv"),
+        "expected_raw_rows": EXPECTED_RAW_ROWS,
+        "expected_clean_keys": EXPECTED_CLEAN_KEYS,
+        "expected_target_conflicts": {"porcentagem-data": 0},
+        "expected_endpoints": EXPECTED_ENDPOINT_COUNT,  # warmup 30, stride 3
+    },
+    "gearbox": {
+        "dataset_id": "gearbox",
+        "unit_kind": "event",
+        "sensor_columns": GEARBOX_SENSOR_COLUMNS,
+        "equipment_groups": {name: tuple(ids)
+                             for name, ids in GEARBOX_EQUIPMENT_GROUPS.items()},
+        "measurement_by_id": {
+            fault_id: GEARBOX_MEASUREMENT_NAMES[(fault_id - 1) % len(GEARBOX_MEASUREMENT_NAMES)]
+            for fault_id in range(1, 19)
+        },
+        "fpt_annotations": {int(fault_id): date for fault_id, date
+                            in GEARBOX_FPT_ANNOTATIONS.items()},
+        "fpt_note": _GEARBOX_FPT_NOTE,
+        "labels": _porcentagem_label(
+            "Features_gearbox_score_todos_RUL-porcentagem-data.csv"),
+        "expected_raw_rows": 2946,
+        "expected_clean_keys": 2946,
+        "expected_target_conflicts": {"porcentagem-data": 0},
+        "expected_endpoints": 822,  # warmup 30, stride 3
+    },
+}
+
+
+def get_dataset_profile(name):
+    """Return a fresh deep copy of the declarative profile for ``name``.
+
+    Only ``'gerador'`` and ``'gearbox'`` are accepted. Mutating the returned
+    dict never affects module state or later calls.
+    """
+    if not isinstance(name, str) or name not in _DATASET_PROFILES:
+        raise ValueError(
+            f"Unknown dataset profile: {name!r}. "
+            f"Expected one of {sorted(_DATASET_PROFILES)}."
+        )
+    return copy.deepcopy(_DATASET_PROFILES[name])
+
+
 __all__ = [
     "coerce_fault_ids", "load_raw_label", "consolidate_frame",
     "make_splits", "masks_for_fold", "phase_for_date",
@@ -140,6 +244,8 @@ __all__ = [
     "build_feature_row", "build_feature_frame",
     "compute_weights", "regression_metrics", "metric_breakdown",
     "scaled_prediction_to_units", "fold_metric_rows", "aggregate_metric_rows",
+    "get_dataset_profile",
+    "PREPROCESSING_OPTIONS", "signed_log1p", "TabularPreprocessor",
 ]
 
 
@@ -866,3 +972,116 @@ def aggregate_metric_rows(rows):
     overall["scope"] = "equipment_macro"
     overall["aggregation"] = "media_igual_entre_4_equipamentos_por_familia"
     return pd.concat([result, overall], ignore_index=True)
+
+
+# ---------------------------------------------------------------------------
+# Group E — train-only tabular preprocessing (imputation, indicators, scaling).
+# ---------------------------------------------------------------------------
+
+PREPROCESSING_OPTIONS = ("none", "standard", "robust", "minmax",
+                         "signed_log1p_standard")
+_SCALED_PREPROCESSING = ("standard", "robust", "minmax", "signed_log1p_standard")
+
+
+def signed_log1p(values):
+    """Signed log1p: ``sign(x) * log1p(|x|)``; odd and defined for negatives."""
+    values = np.asarray(values, dtype=float)
+    return np.sign(values) * np.log1p(np.abs(values))
+
+
+class TabularPreprocessor:
+    """Median imputation, optional missing indicators and optional scaling.
+
+    Median fill values, constant-fallback columns and the scaler are learned
+    only in ``fit``; ``transform`` never refits. Columns that are entirely
+    non-finite in training fall back to 0.0. For ``signed_log1p_standard`` the
+    signed log is applied BEFORE the scaler. With ``add_missing_indicators``
+    False, no ``na__`` columns are emitted.
+    """
+
+    def __init__(self, method, add_missing_indicators=True):
+        if method not in PREPROCESSING_OPTIONS:
+            raise ValueError(f"Pré-processamento inválido: {method}")
+        self.method = method
+        self.add_missing_indicators = bool(add_missing_indicators)
+
+    def fit(self, frame):
+        if not isinstance(frame, pd.DataFrame) or frame.shape[1] == 0:
+            raise ValueError("Pré-processador exige DataFrame com colunas.")
+        if frame.columns.duplicated().any():
+            raise ValueError("Colunas duplicadas no pré-processador.")
+        self.columns_ = list(frame.columns)
+        self.indicator_columns_ = (
+            [f"na__{column}" for column in self.columns_]
+            if self.add_missing_indicators else []
+        )
+        self.fill_values_ = {}
+        self.constant_fallback_columns_ = []
+        for column in self.columns_:
+            values = pd.to_numeric(frame[column], errors="coerce").to_numpy(float)
+            finite = values[np.isfinite(values)]
+            if finite.size:
+                fill = float(np.median(finite))
+            else:
+                fill = 0.0
+                self.constant_fallback_columns_.append(column)
+            self.fill_values_[column] = fill
+        base = self._base_array(frame)
+        base = self._transform_values(base)
+        if self.method in _SCALED_PREPROCESSING:
+            from sklearn.preprocessing import MinMaxScaler, RobustScaler, StandardScaler
+
+            if self.method in ("standard", "signed_log1p_standard"):
+                self.scaler_ = StandardScaler()
+            elif self.method == "robust":
+                self.scaler_ = RobustScaler()
+            else:
+                self.scaler_ = MinMaxScaler()
+            self.scaler_.fit(base)
+        else:
+            self.scaler_ = None
+        self.n_features_in_ = len(self.columns_)
+        self.n_features_out_ = len(self.columns_) + len(self.indicator_columns_)
+        return self
+
+    def _base_array(self, frame):
+        if list(frame.columns) != self.columns_:
+            raise ValueError("Colunas diferentes do ajuste do pré-processador.")
+        columns = []
+        for column in self.columns_:
+            values = pd.to_numeric(frame[column], errors="coerce").to_numpy(float)
+            if column in self.constant_fallback_columns_:
+                values = np.full(values.shape, self.fill_values_[column], dtype=float)
+            else:
+                values = np.where(np.isfinite(values), values,
+                                  self.fill_values_[column])
+            columns.append(values)
+        return np.column_stack(columns).astype(float)
+
+    def _transform_values(self, base):
+        if self.method == "signed_log1p_standard":
+            return signed_log1p(base)
+        return base
+
+    def transform(self, frame):
+        base = self._base_array(frame)
+        base = self._transform_values(base)
+        if self.scaler_ is not None:
+            base = self.scaler_.transform(base)
+        blocks = [base]
+        if self.add_missing_indicators:
+            blocks.append(np.column_stack([
+                (~np.isfinite(pd.to_numeric(frame[column], errors="coerce")
+                              .to_numpy(float))).astype(float)
+                for column in self.columns_
+            ]))
+        result = np.column_stack(blocks)
+        if not np.isfinite(result).all():
+            raise ValueError("Pré-processador produziu valores não finitos.")
+        return result
+
+    def fit_transform(self, frame):
+        return self.fit(frame).transform(frame)
+
+    def get_feature_names_out(self):
+        return np.asarray(self.columns_ + self.indicator_columns_, dtype=object)
