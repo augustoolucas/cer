@@ -353,9 +353,25 @@ def normalize_params(family, params):
     return dict(sorted(canonical.items()))
 
 
+REQUIRED_PARAMS = {
+    "ridge": ("alpha",), "elasticnet": ("alpha", "l1_ratio", "max_iter"),
+    "huber": ("epsilon", "alpha", "max_iter"),
+    "svr": ("C", "epsilon", "gamma", "max_iter", "cache_size"),
+    "knn": ("n_neighbors", "weights", "p"),
+    "extra_trees": ("n_estimators", "max_depth", "min_samples_leaf", "max_features"),
+    "random_forest": ("n_estimators", "max_depth", "min_samples_leaf", "max_features"),
+    "hist_gb": ("max_iter", "min_samples_leaf", "max_leaf_nodes", "learning_rate",
+                "l2_regularization", "loss", "early_stopping"),
+    "catboost": ("iterations", "depth", "learning_rate", "l2_leaf_reg", "loss_function"),
+}
+
+
 def build_estimator(family, params, seed):
     """Unfitted estimator from canonical parameters; unknown family is an error."""
     p = params
+    missing = [name for name in REQUIRED_PARAMS.get(family, ()) if name not in p]
+    if missing:
+        raise InvalidRecipe(f"{family}: missing declared parameters {missing}")
     if family in CONSTANT_FAMILIES:
         return ConstantRegressor(family)
     if family == "ridge":
@@ -2473,6 +2489,32 @@ class OuterSearch:
         notebooks. ``features.redundancy = legacy`` keeps the duplicated count/absence
         columns of the original presets.
         """
+        recipes, named, unavailable = self._legacy_recipes()
+        multiplier = 6 if self.dataset_name == "gearbox" else 1
+        if recipes and self.runner.budget.remaining() >= len(recipes) * len(self.inner_groups) * multiplier:
+            results = self._evaluate(
+                [(-1000 - index, "legacy_control", recipe)
+                 for index, recipe in enumerate(recipes)], seed_offset=0)
+            # Descriptive only: these scores are recorded but never reach family state,
+            # the anchor, the tie-break or the final selection.
+            evaluated = [{**meta, "status": result.status, "score_pp": result.score_pp,
+                          "rmse_pp": result.rmse_pp, "candidate_id": result.candidate_id,
+                          "reasons": result.reasons[:3]}
+                         for result, meta in zip(results, named)]
+            self._legacy_note = (f"evaluated {len(evaluated)} declared legacy quick presets "
+                                 "under the current inner LOGO (descriptive control, outside "
+                                 "selection)")
+        elif recipes:
+            evaluated = []
+            self._legacy_note = "not run: fit budget insufficient for the controls"
+        else:
+            evaluated = []
+            self._legacy_note = "not run: no legacy presets declared in this config"
+        self._legacy_results = evaluated + unavailable
+        return
+
+    def _legacy_recipes(self):
+        """Declared legacy presets as valid recipes, plus per-preset metadata."""
         declaration = self.config.get("legacy_quick_control", {})
         defaults = declaration.get("defaults", {})
         recipes, named, unavailable = [], [], []
@@ -2493,7 +2535,11 @@ class OuterSearch:
                 "postprocess.running_min": False,
                 "weights": entry["weights"],
             }
-            recipe = normalize_recipe(family, entry["params"], features,
+            params = dict(entry["params"])
+            for name, spec in self.config["families"][family].get("space", {}).items():
+                if spec["type"] == "const":  # fixed by definition, not tuned
+                    params.setdefault(name, spec["value"])
+            recipe = normalize_recipe(family, params, features,
                                       self.config["default_recipe"])
             try:
                 self._check_recipe(recipe)
@@ -2505,28 +2551,7 @@ class OuterSearch:
             named.append({"name": entry["name"], "family": family,
                           "weights": entry["weights"],
                           "representation": entry["representation"]})
-        evaluated = []
-        if recipes:
-            multiplier = 6 if self.dataset_name == "gearbox" else 1
-            needed = len(recipes) * len(self.inner_groups) * multiplier
-            if self.runner.budget.remaining() >= needed:
-                results = self._evaluate(
-                    [(-1000 - index, "legacy_control", recipe)
-                     for index, recipe in enumerate(recipes)], seed_offset=0)
-                for info, result in zip(named, results):
-                    self.trials.append(result)
-                    evaluated.append({**info, "status": result.status,
-                                      "score_pp": result.score_pp,
-                                      "rmse_pp": result.rmse_pp,
-                                      "reasons": result.reasons,
-                                      "candidate_id": result.candidate_id})
-            else:
-                self._legacy_note = "not run: fit budget insufficient for the controls"
-        self._legacy_results = evaluated + unavailable
-        if not hasattr(self, "_legacy_note"):
-            self._legacy_note = (f"evaluated {len(evaluated)} declared legacy quick presets "
-                                 "under the current inner LOGO (descriptive control, not the "
-                                 "historical protocol)")
+        return recipes, named, unavailable
 
     def _confirm_seeds(self):
         """Confirm the two strongest stochastic learned families with fixed offsets 0,1,2."""

@@ -2104,6 +2104,97 @@ class GearboxEndToEndRunTests(unittest.TestCase):
             self.assertEqual(event_eval["track"], "event")
             self.assertIn("aggregation", event_eval["candidates"])
 
+class DeclaredPresetCompletenessTests(unittest.TestCase):
+    """Declared presets with only meaningful knobs must build; omissions fail loudly."""
+
+    def test_real_legacy_presets_get_definitional_const_parameters(self):
+        dataset = _synthetic_dataset(groups=("A", "B", "C"), records=12)
+        table = b.build_feature_table(dataset, 12, 32, {"protocol": {
+            "relative_eps": {"floor": 1e-8, "relative": 1e-6}}})
+        train = dataset.meta.loc[dataset.meta["equipment"] != "C",
+                                 ["endpoint_id", "Falha", "equipment", "Date", "phase", "y"]]
+        cfg = b.effective_config(b.load_config(), False)
+        with tempfile.TemporaryDirectory() as tmp:
+            search = b.OuterSearch(dataset_name="gerador", outer_group="C", train_meta=train,
+                                   tables=lambda w, c: table, runner=_runner(tmp), config=cfg,
+                                   candidates=b.CandidateStore(Path(tmp) / "candidates"),
+                                   identity={}, variance_key="s2")
+            recipes, named, _unavailable = search._legacy_recipes()
+        svr = [r for r in recipes if r["family"] == "svr"]
+        self.assertEqual(len(svr), 2)
+        for recipe in svr:
+            for name in ("max_iter", "cache_size", "gamma"):
+                self.assertIn(name, recipe["params"])
+            b.build_estimator("svr", recipe["params"], 0)
+        for recipe in recipes:
+            b.build_estimator(recipe["family"], recipe["params"], 0)
+
+    def test_missing_declared_parameter_is_an_invalid_recipe_not_a_crash(self):
+        with self.assertRaises(b.InvalidRecipe):
+            b.build_estimator("svr", {"C": 1.0, "epsilon": 0.1}, 0)
+
+class LegacyControlIsolationTests(unittest.TestCase):
+    """Legacy quick presets are descriptive: they must never touch selection state."""
+
+    def test_legacy_controls_leave_every_family_state_untouched(self):
+        dataset = _synthetic_dataset(groups=("A", "B", "C"), records=12)
+        table = b.build_feature_table(dataset, 12, 32, {"protocol": {
+            "relative_eps": {"floor": 1e-8, "relative": 1e-6}}})
+        train = dataset.meta.loc[dataset.meta["equipment"] != "C",
+                                 ["endpoint_id", "Falha", "equipment", "Date", "phase", "y"]]
+        cfg = b.effective_config(b.load_config(), False)
+        with tempfile.TemporaryDirectory() as tmp:
+            search = b.OuterSearch(dataset_name="gerador", outer_group="C", train_meta=train,
+                                   tables=lambda w, c: table, runner=_runner(tmp), config=cfg,
+                                   candidates=b.CandidateStore(Path(tmp) / "candidates"),
+                                   identity={}, variance_key="s2")
+            states = search.states
+            before = {family: (state.best, state.anchor_score, state.last_improve_at,
+                               state.proposed, state.invalid, state.failed)
+                      for family, state in states.items()}
+
+            def fake_evaluate(items, seed_offset=0):
+                return [b.CandidateResult(
+                    key=f"legacy-{number}", family=recipe["family"], recipe=recipe,
+                    trial=number, phase="legacy_control", status="ok", reasons=[],
+                    score_pp=0.01, rmse_pp=0.02, complexity=1, oof=None, fit_keys=[],
+                    candidate_id=f"legacy-{number}")
+                    for number, _phase, recipe in items]
+
+            search._evaluate = fake_evaluate
+            search._legacy_controls()
+            after = {family: (state.best, state.anchor_score, state.last_improve_at,
+                              state.proposed, state.invalid, state.failed)
+                     for family, state in states.items()}
+        self.assertEqual(before, after)
+        self.assertTrue(search._legacy_results)
+        self.assertTrue(all(row["status"] == "ok" for row in search._legacy_results))
+        self.assertTrue(all(row["candidate_id"].startswith("legacy-")
+                            for row in search._legacy_results))
+        self.assertTrue(all("rmse_pp" in row for row in search._legacy_results))
+        self.assertFalse(any(row["score_pp"] == 1.0 for row in search._legacy_results))
+
+    def test_legacy_controls_do_not_change_the_selected_candidate(self):
+        meta, table = _synthetic_meta()
+        train = meta.loc[meta["equipment"] != "A",
+                         ["endpoint_id", "Falha", "equipment", "Date", "phase", "y"]]
+        cfg = _small_config(("mean", "ridge"))
+        cfg["tuning_enabled"] = False
+        results = []
+        with tempfile.TemporaryDirectory() as tmp:
+            for with_controls in (False, True):
+                local = b.effective_config(cfg, False)
+                if not with_controls:
+                    local["legacy_quick_control"]["recipes"] = []
+                search = b.OuterSearch(dataset_name="gerador", outer_group="A", train_meta=train,
+                                       tables=lambda w, c: table, runner=_runner(tmp),
+                                       config=local,
+                                       candidates=b.CandidateStore(Path(tmp) / f"c{with_controls}"),
+                                       study_dir=Path(tmp) / f"s{with_controls}", identity={},
+                                       variance_key="s2")
+                results.append(search.run()["chosen"])
+        self.assertEqual(results[0]["candidate_id"], results[1]["candidate_id"])
+
 class CliSubprocessTests(unittest.TestCase):
     SCRIPT = ROOT / "baseline_experiments.py"
 
