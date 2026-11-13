@@ -1,0 +1,703 @@
+{
+  "protocol": {
+    "warmup_records": 30,
+    "endpoint_stride": 3,
+    "tie_tolerance_pp": 0.1,
+    "min_gain_pp": 0.5,
+    "relative_eps": {
+      "floor": 1e-08,
+      "relative": 1e-06
+    }
+  },
+  "datasets": {
+    "gerador": {
+      "outer_order": [
+        "A",
+        "B",
+        "C",
+        "D"
+      ]
+    },
+    "gearbox": {
+      "outer_order": [
+        "E1",
+        "E2",
+        "E3"
+      ]
+    }
+  },
+  "feature_group_sets": {
+    "sensors": [
+      "sensors"
+    ],
+    "sensors+cadence": [
+      "sensors",
+      "cadence"
+    ],
+    "sensors+elapsed": [
+      "sensors",
+      "elapsed"
+    ],
+    "cadence+elapsed": [
+      "cadence",
+      "elapsed"
+    ]
+  },
+  "default_recipe": {
+    "strategy": "pooled_anonymous",
+    "features": {
+      "representation": "summary",
+      "redundancy": "dedup",
+      "width_hours": 12,
+      "context_bins": 32,
+      "feature_groups": "sensors+cadence",
+      "relative_reference": null,
+      "drop_variance": false,
+      "measurement_onehot": false
+    },
+    "preprocess": {
+      "method": "standard",
+      "missing_indicators": true,
+      "clip_quantiles": false
+    },
+    "weights": "none",
+    "postprocess": {
+      "clip01": true,
+      "ema_alpha": 1.0,
+      "running_min": false
+    }
+  },
+  "recipe_space": {
+    "strategy": {
+      "type": "categorical",
+      "choices": [
+        "pooled_anonymous",
+        "measurement_onehot",
+        "component_experts",
+        "measurement_experts"
+      ],
+      "datasets": [
+        "gearbox"
+      ],
+      "default": "pooled_anonymous"
+    },
+    "features.representation": {
+      "type": "categorical",
+      "choices": [
+        "current",
+        "summary",
+        "robust"
+      ]
+    },
+    "features.redundancy": {
+      "type": "categorical",
+      "choices": [
+        "legacy",
+        "dedup"
+      ]
+    },
+    "features.width_hours": {
+      "type": "categorical",
+      "choices": [
+        6,
+        12,
+        24
+      ]
+    },
+    "features.context_bins": {
+      "type": "categorical",
+      "choices": [
+        16,
+        32,
+        64
+      ]
+    },
+    "features.feature_groups": {
+      "type": "categorical",
+      "choices": [
+        "sensors",
+        "sensors+cadence",
+        "sensors+elapsed",
+        "cadence+elapsed"
+      ]
+    },
+    "features.relative_reference": {
+      "type": "categorical",
+      "choices": [
+        null,
+        10,
+        30
+      ]
+    },
+    "features.drop_variance": {
+      "type": "categorical",
+      "choices": [
+        false,
+        true
+      ]
+    },
+    "features.measurement_onehot": {
+      "type": "categorical",
+      "choices": [
+        false,
+        true
+      ],
+      "datasets": [
+        "gearbox"
+      ],
+      "default": false
+    },
+    "preprocess.method": {
+      "type": "categorical",
+      "choices": [
+        "none",
+        "standard",
+        "robust",
+        "minmax",
+        "signed_log1p_standard"
+      ]
+    },
+    "preprocess.missing_indicators": {
+      "type": "categorical",
+      "choices": [
+        true,
+        false
+      ]
+    },
+    "preprocess.clip_quantiles": {
+      "type": "categorical",
+      "choices": [
+        false,
+        true
+      ]
+    },
+    "weights": {
+      "type": "categorical",
+      "choices": [
+        "none",
+        "component",
+        "component_phase",
+        "group_equal"
+      ]
+    },
+    "postprocess.clip01": {
+      "type": "categorical",
+      "choices": [
+        false,
+        true
+      ]
+    },
+    "postprocess.ema_alpha": {
+      "type": "categorical",
+      "choices": [
+        1.0,
+        0.5,
+        0.25
+      ]
+    },
+    "postprocess.running_min": {
+      "type": "categorical",
+      "choices": [
+        false,
+        true
+      ]
+    }
+  },
+  "families": {
+    "mean": {
+      "kind": "constant",
+      "space": {}
+    },
+    "median": {
+      "kind": "constant",
+      "space": {}
+    },
+    "ridge": {
+      "kind": "model",
+      "space": {
+        "alpha": {
+          "type": "float",
+          "low": 0.001,
+          "high": 10000,
+          "log": true
+        }
+      }
+    },
+    "elasticnet": {
+      "kind": "model",
+      "space": {
+        "alpha": {
+          "type": "float",
+          "low": 1e-05,
+          "high": 10,
+          "log": true
+        },
+        "l1_ratio": {
+          "type": "float",
+          "low": 0.05,
+          "high": 1.0
+        },
+        "max_iter": {
+          "type": "const",
+          "value": 5000
+        }
+      }
+    },
+    "huber": {
+      "kind": "model",
+      "space": {
+        "epsilon": {
+          "type": "float",
+          "low": 1.1,
+          "high": 2.0
+        },
+        "alpha": {
+          "type": "float",
+          "low": 1e-05,
+          "high": 10,
+          "log": true
+        },
+        "max_iter": {
+          "type": "const",
+          "value": 500
+        }
+      }
+    },
+    "svr": {
+      "kind": "model",
+      "space": {
+        "C": {
+          "type": "float",
+          "low": 0.01,
+          "high": 1000,
+          "log": true
+        },
+        "epsilon": {
+          "type": "float",
+          "low": 0.005,
+          "high": 0.2,
+          "log": true
+        },
+        "gamma_mode": {
+          "type": "categorical",
+          "choices": [
+            "scale",
+            "fixed"
+          ]
+        },
+        "gamma": {
+          "type": "float",
+          "low": 0.0001,
+          "high": 1,
+          "log": true
+        },
+        "max_iter": {
+          "type": "const",
+          "value": 20000
+        },
+        "cache_size": {
+          "type": "const",
+          "value": 128
+        }
+      }
+    },
+    "knn": {
+      "kind": "model",
+      "space": {
+        "n_neighbors": {
+          "type": "int",
+          "low": 3,
+          "high": 40,
+          "cap": "n_train_min"
+        },
+        "weights": {
+          "type": "categorical",
+          "choices": [
+            "uniform",
+            "distance"
+          ]
+        },
+        "p": {
+          "type": "categorical",
+          "choices": [
+            1,
+            2
+          ]
+        }
+      }
+    },
+    "extra_trees": {
+      "kind": "model",
+      "space": {
+        "n_estimators": {
+          "type": "int",
+          "low": 128,
+          "high": 384
+        },
+        "max_depth": {
+          "type": "categorical",
+          "choices": [
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            null
+          ]
+        },
+        "min_samples_leaf": {
+          "type": "int",
+          "low": 1,
+          "high": 20
+        },
+        "max_features": {
+          "type": "categorical",
+          "choices": [
+            "sqrt",
+            0.5,
+            1.0
+          ]
+        },
+        "n_jobs": {
+          "type": "const",
+          "value": 1
+        }
+      }
+    },
+    "random_forest": {
+      "kind": "model",
+      "space": {
+        "n_estimators": {
+          "type": "int",
+          "low": 128,
+          "high": 384
+        },
+        "max_depth": {
+          "type": "categorical",
+          "choices": [
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            null
+          ]
+        },
+        "min_samples_leaf": {
+          "type": "int",
+          "low": 1,
+          "high": 20
+        },
+        "max_features": {
+          "type": "categorical",
+          "choices": [
+            "sqrt",
+            0.5,
+            1.0
+          ]
+        },
+        "n_jobs": {
+          "type": "const",
+          "value": 1
+        }
+      }
+    },
+    "hist_gb": {
+      "kind": "model",
+      "space": {
+        "max_iter": {
+          "type": "int",
+          "low": 50,
+          "high": 300
+        },
+        "min_samples_leaf": {
+          "type": "int",
+          "low": 5,
+          "high": 30
+        },
+        "max_leaf_nodes": {
+          "type": "int",
+          "low": 7,
+          "high": 31
+        },
+        "learning_rate": {
+          "type": "float",
+          "low": 0.02,
+          "high": 0.2,
+          "log": true
+        },
+        "l2_regularization": {
+          "type": "float",
+          "low": 0.01,
+          "high": 100,
+          "log": true
+        },
+        "loss": {
+          "type": "categorical",
+          "choices": [
+            "squared_error",
+            "absolute_error"
+          ]
+        },
+        "early_stopping": {
+          "type": "const",
+          "value": false
+        }
+      }
+    },
+    "catboost": {
+      "kind": "model",
+      "space": {
+        "iterations": {
+          "type": "int",
+          "low": 100,
+          "high": 400
+        },
+        "depth": {
+          "type": "int",
+          "low": 3,
+          "high": 7
+        },
+        "learning_rate": {
+          "type": "float",
+          "low": 0.02,
+          "high": 0.2,
+          "log": true
+        },
+        "l2_leaf_reg": {
+          "type": "float",
+          "low": 1,
+          "high": 30
+        },
+        "loss_function": {
+          "type": "categorical",
+          "choices": [
+            "RMSE",
+            "MAE"
+          ]
+        },
+        "thread_count": {
+          "type": "const",
+          "value": 1
+        },
+        "allow_writing_files": {
+          "type": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "stages": {
+    "screen_trials": 8,
+    "tune_top_k": 3,
+    "tune_extra_trials": 40,
+    "tune_min_total_trials": 16,
+    "tune_patience_trials": 12,
+    "batch_size": 4,
+    "ensemble_sizes": [
+      2,
+      3
+    ],
+    "ensemble_how": [
+      "mean",
+      "median"
+    ],
+    "ablation_max": 12,
+    "ablation_retune_trials": 16,
+    "ablation_min_gain_pp": 0.5,
+    "confirmation_seeds": 3,
+    "confirmation_top_stochastic": 2,
+    "gearbox_specialist_recipes": 6,
+    "gearbox_specialist_top_k": 2,
+    "gearbox_specialist_extra_trials": 24,
+    "gearbox_specialist_min_gain_pp": 0.5,
+    "gearbox_strategy_recipes_per_family": 2,
+    "gearbox_strategy_extra_per_family": 8,
+    "gearbox_strategy_extra_top": 2
+  },
+  "budgets": {
+    "max_fits_per_dataset": 8000,
+    "fit_timeout_s": 120,
+    "max_failed_fraction_for_expansion": 0.25,
+    "ensemble_members_max": 3,
+    "seed_refits_max": 3,
+    "experts_per_fit_max": 6
+  },
+  "resources": {
+    "start_workers": 2,
+    "max_workers": 8,
+    "max_memory_share_of_initial_available": 0.65,
+    "min_headroom_gib": 1.5,
+    "rss_safety_factor": 1.3,
+    "poll_interval_s": 0.05,
+    "pause_poll_s": 5,
+    "max_pause_s": 30,
+    "worker_floor_mb": 256
+  },
+  "seed_namespace": "cer-baselines-local-v1",
+  "pilot": {
+    "max_fits_per_dataset": 200,
+    "fixed_candidates": {
+      "mean": {
+        "params": {}
+      },
+      "median": {
+        "params": {}
+      },
+      "ridge": {
+        "params": {
+          "alpha": 1.0
+        }
+      },
+      "extra_trees": {
+        "params": {
+          "n_estimators": 16,
+          "max_depth": 8,
+          "min_samples_leaf": 5,
+          "max_features": "sqrt",
+          "n_jobs": 1
+        }
+      }
+    }
+  },
+  "legacy_quick_control": {
+    "description": "Descriptive evaluation under this run's inner LOGO of the historical quick presets declared here; not an AST/notebook extraction and not a reproduction of the old protocol.",
+    "defaults": {
+      "width_hours": 12,
+      "context_bins": 32,
+      "normalization": "standard",
+      "missing_indicators": true,
+      "redundancy": "legacy",
+      "timing": false,
+      "clip_output": false
+    },
+    "recipes": [
+      {
+        "name": "mean_summary_none",
+        "family": "mean",
+        "params": {},
+        "representation": "summary",
+        "weights": "none"
+      },
+      {
+        "name": "ridge1_summary_none",
+        "family": "ridge",
+        "params": {
+          "alpha": 1.0
+        },
+        "representation": "summary",
+        "weights": "none"
+      },
+      {
+        "name": "ridge10_current_component",
+        "family": "ridge",
+        "params": {
+          "alpha": 10.0
+        },
+        "representation": "current",
+        "weights": "component"
+      },
+      {
+        "name": "svr10_summary_none",
+        "family": "svr",
+        "params": {
+          "C": 10.0,
+          "epsilon": 0.1
+        },
+        "representation": "summary",
+        "weights": "none"
+      },
+      {
+        "name": "svr_current_component_phase",
+        "family": "svr",
+        "params": {
+          "C": 10.0,
+          "epsilon": 0.05
+        },
+        "representation": "current",
+        "weights": "component_phase"
+      },
+      {
+        "name": "et128_summary_none",
+        "family": "extra_trees",
+        "params": {
+          "n_estimators": 128,
+          "max_depth": 8,
+          "min_samples_leaf": 2,
+          "max_features": "sqrt"
+        },
+        "representation": "summary",
+        "weights": "none"
+      },
+      {
+        "name": "et_current_component",
+        "family": "extra_trees",
+        "params": {
+          "n_estimators": 128,
+          "max_depth": 10,
+          "min_samples_leaf": 1,
+          "max_features": 0.5
+        },
+        "representation": "current",
+        "weights": "component"
+      }
+    ]
+  },
+  "gearbox_strategies": {
+    "pooled_anonymous": {
+      "track": "series",
+      "availability": "one measurement row"
+    },
+    "pooled_measurement_onehot": {
+      "track": "series",
+      "availability": "known measurement type"
+    },
+    "component_experts": [
+      "HSS",
+      "IMS",
+      "LSS",
+      "PLANETARIA"
+    ],
+    "measurement_experts": [
+      "HSS-Radial",
+      "HSS-Axial",
+      "IMS",
+      "LSS",
+      "Planetaria 0\u00b0",
+      "Planetaria 90\u00b0"
+    ],
+    "joint_event": {
+      "track": "event",
+      "signals_per_event": 48,
+      "expected_endpoints": 137,
+      "aggregations": [
+        "mean",
+        "median"
+      ]
+    },
+    "screening": [
+      "pooled_anonymous",
+      "measurement_onehot",
+      "component_experts",
+      "measurement_experts"
+    ]
+  }
+}
