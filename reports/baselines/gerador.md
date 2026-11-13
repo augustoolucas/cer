@@ -236,3 +236,12 @@ Two earlier runner fixes were also needed before any study (disclosed, not hidde
 - The 90 recorded fit failures are not imputed; families with such failures may be slightly under-represented in the descriptive tables.
 - Ensemble `pred_raw` is a stored placeholder, not a model output; all reported metrics use `pred_post`.
 - Gearbox was not trained; nothing here transfers to the gearbox datasets.
+
+## 14. Curvas (artefatos locais, descritivos)
+
+Plots gerados **apenas** das predições OOF congeladas do run principal e do controle de tempo/cadência já executado (nenhum ajuste novo). Eixo x = data do registro, y = RUL em %; preto = alvo, azul = escolha primária da seleção interna, laranja = controle de tempo/cadência casado, cinza tracejado = referência fixa `mean`. Um painel por `Falha`.
+
+- [gerador_outerA_by_fault.png](../../results/baselines/gerador/717be61e363ea09d/plots/gerador_outerA_by_fault.png)
+- [gerador_outerB_by_fault.png](../../results/baselines/gerador/717be61e363ea09d/plots/gerador_outerB_by_fault.png)
+- [gerador_outerC_by_fault.png](../../results/baselines/gerador/717be61e363ea09d/plots/gerador_outerC_by_fault.png)
+- [gerador_outerD_by_fault.png](../../results/baselines/gerador/717be61e363ea09d/plots/gerador_outerD_by_fault.png)
