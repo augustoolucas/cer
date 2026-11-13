@@ -1,228 +1,240 @@
-# Gearbox baseline exploration — full nested study (task 3)
+# Baseline do gearbox: exploração com validação agrupada aninhada
 
-Bounded local CPU exploration of the **gearbox** dataset: 822 per-series endpoints over 3 held-out events (E1 = measurements 1–6, E2 = 7–12, E3 = 13–18), 6 measurements per event, plus a separate strict joint-event track (137 synchronized event timestamps). All numbers come from the run artifacts and an independent numpy recomputation. No generator winner was transferred.
+Estudo exploratório de previsão de RUL no dataset **gearbox**, com três eventos de falha (E1, E2,
+E3), seis papéis de medição por evento e duas trilhas de avaliação: previsão por série (822
+endpoints) e eventos sincronizados (137 timestamps). Todo erro é reportado em RUL 0..1.
 
-| item | value |
-| --- | --- |
-| repository state | `6e315ee` (approved task-2 commit) + no source changes |
-| runner+`cer_rul` code hash | `4afad1ce15f88a3b857c1f0815a6c4dd1f365b9c86bfe33d6913cd7b14f6e142` |
-| main run | fp `101e2f1fc3d406b1` · `results/baselines/gearbox/101e2f1fc3d406b1` |
-| time/cadence control run | fp `6932403970ae9c17` · `results/baselines/gearbox/controls/gearbox/6932403970ae9c17` |
-| source CSV sha256 | `332d452bbe2a1c2d4cb4a3b046e5643e386545f0db3cad323dbfd7defdbdd0e4` |
-| endpoint-set sha256 | `dc2e303323c9d6174434fe8d08de5b9b05766f801319665acce0f482cdfafa45` |
-| versions | {'catboost': 'catboost 1.2.10', 'numpy': '2.5.4', 'optuna': '5.0.0', 'pandas': '3.1.1', 'psutil': '7.2.2', 'python': '3.12.3', 'sklearn': '1.9.1'} |
+## 1. Dados e alvo
 
-## 1. Commands and timings (UTC, 2026-11-13)
+- 18 séries de medição (6 por evento), que geram **822 endpoints** de série.
+- Seis papéis por evento: HSS radial (posição 1), HSS axial (2), IMS (3), LSS (4), Planetaria 0°
+  (5) e Planetaria 90° (6). Quatro componentes físicos: HSS (posições 1–2), IMS (3), LSS (4) e
+  Planetaria (5–6).
+- Trilha de eventos: **137 timestamps sincronizados** nos 3 eventos (71 + 33 + 33), em que as seis
+  medições existem com a mesma data, mesmo alvo e mesma fase; nenhuma linha é preenchida ou
+  propagada.
+- Alvo em 0..1; entradas apenas com histórico observado até o endpoint.
 
-```
-venv/bin/python baseline_experiments.py search   --dataset gearbox  > main_search.log     # 02:36:32 → 02:54:56 (1104 s elapsed)
-venv/bin/python baseline_experiments.py evaluate --dataset gearbox  > main_evaluate.log   # 02:55:01 → 02:56:05 (64 s)
-venv/bin/python baseline_experiments.py verify   --dataset gearbox  > main_verify.log     # 02:56:41 → 02:57:02 (21 s, 478 PASS)
-venv/bin/python baseline_experiments.py report   --dataset gearbox
-# predeclared time/cadence-only control (separate config and output root)
-venv/bin/python baseline_experiments.py search   --dataset gearbox --config results/baselines/gearbox/controls/config_cadence_elapsed_only.json --output-root results/baselines/gearbox/controls   # 02:34:48 → 02:36:26 (98 s)
-venv/bin/python baseline_experiments.py evaluate …   # 02:56:05 → 02:56:36 (31 s); report; verify → evaluated_complete
-```
+## 2. Método
 
-| stage | fits started | cache hits | unique payloads ok/failed | scheduler wall s | stage elapsed s | peak worker USS MiB | max workers | budget charged |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| main search | 1248 | 28 | 1199/49 | 357.4 | 1104 | 57.5 | 5 | 1248/8000 |
-| main evaluate | 78 | 0 | 78/0 | 29.4 | 64 | 30.2 | 5 | 1326/8000 |
-| control search | 84 | 6 | 84/0 | 13.3 | 98 | 15.8 | 5 | 84/8000 |
-| control evaluate | 30 | 0 | 30/0 | 6.6 | 31 | 19.1 | 5 | 114/8000 |
+Validação aninhada e agrupada com **3 folds externos** (um evento retido por vez) e **2 folds
+internos** (treina em um dos eventos restantes, valida no outro). O escore interno é MAE por
+`Falha` dentro de cada grupo interno, média igual entre componentes, depois média igual entre
+grupos. Pré-processamento ajustado só no treino; seleção apenas por escore interno; escolhas
+congeladas antes da avaliação de desempenho externo; rótulos externos não participam da
+seleção nem do ajuste. Empates dentro de **0.001** (RUL) vão para menor
+complexidade, depois menor RMSE, depois identificador estável.
 
-`runner.wall_s` is the fit-scheduler loop only; elapsed includes nine feature-grid builds (~49 s each on first use), proposal generation, scoring and artifact writes. Main study used 1326 fits of 8000 (609 reserved for final refits); the rest was not spent. Unique payloads (source of truth): **1326 = 1277 ok + 49 failed**, i.e. 3.7% of all fits failed (49/1326) and 3.9% of search fits (49/1248); all failures are recorded convergence/solver failures with reasons and were never scored. Cache hits (28) are reused payloads, not extra fits. Fits are single-threaded (BLAS/OpenMP=1, `n_jobs=1`), 120 s hard timeout, RAM policy 1.5 GiB reserve / ≤65% availability / 256 MiB floor.
+Busca por dataset: 8 tentativas por família, até 40 adicionais para as 3 melhores (platô: mínimo
+16 e 12 sem ganho ≥ **0.005**), até 12 ablações, retreino de até 16 tentativas apenas com ganho ≥
+0.005, 3 sementes fixas nas 2 famílias estocásticas melhores, ensembles uniformes e limite de 8000
+ajustes.
 
-## 2. Protocol
+Estratégias avaliadas para a trilha de série, além do conjunto agrupado (pooled):
 
-Outer = leave-one-event-out (E1, E2, E3). Inner = 2 folds over the remaining 2 events (train one, validate the other). For each inner group the MAE is computed separately for every `Falha` (one per measurement series) and averaged equally; the candidate score is the equal mean of the two group scores, in pp. Tie: within 0.1 pp lower complexity, then lower inner RMSE, then stable candidate ID. Screening 8 trials per family for 9 learned families plus mean/median references, top-3 tuned with the declared patience rule, ≤12 one-axis ablations, ≤16 parameter-only retune at ≥0.5 pp, 3-seed confirmation for the top-2 stochastic families, uniform ensembles. Bounded strategy probes (Ridge/ET/HGB only) cover pooled-anonymous, measurement-onehot, 4 component experts and 6 measurement experts; expansion beyond the probe budget requires ≥0.5 pp inner gain. The joint event track is searched separately on 137 strictly aligned event rows.
+- **pooled anônimo**: todas as séries juntas, sem identificação de papel;
+- **pooled + one-hot de medição**: idem, com a posição conhecida como metadado categórico
+  (apenas posições conhecidas, nunca identidade de evento);
+- **4 especialistas por componente** (HSS, IMS, LSS, Planetaria), cada um treinado apenas com suas
+  medições;
+- **6 especialistas por medição**, um por papel.
 
-## 3. Primary baseline — per-series inner selection
+Cada especialista é treinado excluindo **todas** as seis medições do evento retido; especialista
+ausente é falha registrada, nunca substituído por um modelo global. A trilha de eventos usa as 48
+colunas de sinal (6 blocos de 8) por timestamp e uma agregação separada das seis predições de
+série (média ou mediana), com a regra escolhida na validação interna.
 
-| outer | chosen | family | strategy | inner pp | complexity | seeds |
-| --- | --- | --- | --- | --- | --- | --- |
-| E1 | `0342cf2bd308` | catboost | pooled_anonymous | 6.3198 | 93 | [0, 1, 2] |
-| E2 | `88f62aed83d3` | random_forest | pooled_anonymous | 14.4370 | 93 | [0, 1, 2] |
-| E3 | `563b933b4c6a` | hist_gb | pooled + measurement one-hot | 7.6905 | 45 | — |
+Sondagens de estratégia: até 2 receitas por família (apenas `ridge`, `extra_trees`, `hist_gb`) em
+cada estratégia, comparadas ao melhor resultado pooled já ajustado da mesma trilha; expansão além
+da sonda somente com ganho interno ≥ 0.005. Nenhuma sondagem atingiu esse ganho, então nenhuma
+estratégia foi expandida — mas os candidatos das sondas **permaneceram elegíveis** e entraram nos
+melhores resultados por família (por exemplo, os especialistas por medição do fold E1). A escolha
+do fold E3, por sua vez, vem da busca pooled principal com o metadado de medição ativado
+(one-hot), escolhido na ablação interna, e não de uma sondagem.
 
-**E1** (`0342cf2bd308`, inner 6.3198 pp) — catboost strategy=pooled_anonymous; features=robust/legacy/w24h/bins64/sensors+cadence/rel30; pre=signed_log1p_standard(ind=False,clip=True); weights=component; post clip01=True ema=0.5 running_min=True; params={"allow_writing_files": false, "depth": 3, "iterations": 318, "l2_leaf_reg": 10.709674892985614, "learning_rate": 0.07946859979528123, "loss_function": "MAE", "thread_count": 1}
+## 3. Trilha por série: resultados
 
-**E2** (`88f62aed83d3`, inner 14.4370 pp) — random_forest strategy=pooled_anonymous; features=robust/dedup/w12h/bins32/sensors+cadence/rel30; pre=standard(ind=False,clip=True); weights=none; post clip01=True ema=0.25 running_min=True; params={"max_depth": 4, "max_features": 0.5, "min_samples_leaf": 16, "n_estimators": 229, "n_jobs": 1}
-
-**E3** (`563b933b4c6a`, inner 7.6905 pp) — hist_gb strategy=pooled_anonymous; features=current/legacy/w24h/bins64/sensors/rel30/onehot; pre=robust(ind=False,clip=True); weights=group_equal; post clip01=True ema=0.5 running_min=True; params={"early_stopping": false, "l2_regularization": 0.600185725543042, "learning_rate": 0.042487384450975406, "loss": "absolute_error", "max_iter": 164, "max_leaf_nodes": 27, "min_samples_leaf": 18}
-
-Selections are per outer event; no winner is transferred between events.
-
-Stored provenance: E3’s recipe serialises `strategy="pooled_anonymous"` with `features.measurement_onehot=true` (trial −4, ablation phase). The one-hot flag is an opt-in metadata option of the **main pooled search** — the “anonymous” label is nominal, and the bounded pooled-anonymous probe excludes the metadata column. E3 was therefore not selected by the bounded one-hot probe. E1’s `ridge` family best, by contrast, comes from the bounded probe (`strategy_screen`, trial −11001).
-
-## 4. Series-track out-of-fold metrics (822 endpoints)
-
-Equal-event macro = within each held-out event, per-`Falha` MAE/RMSE/signed bias averaged equally over the 6 measurements, then equal average over the 3 events. Pooled point = all 822 records weighted once. Reported separately. Note that the stored per-fold `rmse_pp` in `evaluation.json` is the pointwise RMSE over that event’s records, so it differs slightly from the macro RMSE shown here (the MAE and bias columns do match the stored values).
-
-| outer | n | components | macro MAE pp | macro RMSE pp | macro bias pp |
-| --- | --- | --- | --- | --- | --- |
-| E1 | 426 | 6 | 11.360 | 15.241 | -4.007 |
-| E2 | 198 | 6 | 13.190 | 17.820 | 12.008 |
-| E3 | 198 | 6 | 11.475 | 16.087 | -3.022 |
-| **equal-event average** | 822 | — | **12.008** | **16.383** | **1.660** |
-
-Pooled point metrics: MAE **11.828 pp**, RMSE **16.187 pp**, bias **0.088 pp**.
-
-## 5. Slices, ranges and calibration
-
-| outer | MAE saudável pp | MAE pós-FPT pp | MAE y≤0.2 pp (n) | pred_raw finite | pred_raw outside [0,1] | pred_post outside [0,1] |
-| --- | --- | --- | --- | --- | --- | --- |
-| E1 | 4.98 | 16.90 | 29.04 (24) | 426/426 | 1.4% | 0.0% |
-| E2 | 1.48 | 20.80 | 33.26 (30) | 198/198 | 0.0% | 0.0% |
-| E3 | 1.53 | 16.45 | 18.72 (36) | 198/198 | 0.0% | 0.0% |
-
-Range statistics use finite stored values only; a NaN/empty `pred_raw` (ensemble candidate) is N/A, never counted as out of range. `pred_post` is inside [0,1] for 822/822 records.
-
-## 6. Stability and seed spread
-
-Fixed 3-seed confirmation (offsets 0,1,2, identical hyperparameters and masks; the averaged OOF candidate is selectable, the luckiest seed never is):
-
-| outer | family | seed scores pp | mean pp | std pp | averaged OOF pp |
-| --- | --- | --- | --- | --- | --- |
-| E1 | extra_trees | 12.451, 12.558, 12.463 | 12.491 | 0.048 | 12.492 |
-| E1 | catboost | 6.014, 7.276, 6.275 | 6.522 | 0.544 | 6.320 |
-| E2 | extra_trees | 17.465, 17.498, 17.253 | 17.406 | 0.109 | 17.390 |
-| E2 | random_forest | 14.518, 14.421, 14.388 | 14.442 | 0.055 | 14.437 |
-| E3 | extra_trees | 14.258, 14.917, 14.468 | 14.548 | 0.275 | 14.520 |
-| E3 | catboost | 13.580, 13.546, 13.691 | 13.606 | 0.062 | 13.514 |
-
-Selected: catboost (E1), random_forest (E2), hist_gb (E3) — no family repeats, so this is fold-wise selection rather than one stable gearbox configuration.
-
-## 7. Strategy probes (bounded) and expansion gate
-
-| outer | tuned pooled reference pp | pooled probe | onehot probe | component-expert probe | measurement-expert probe | eligible ≥0.5 pp | expanded |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| E1 | 6.014 | 18.303 | 18.303 | 17.410 | 16.686 | none | none |
-| E2 | 14.518 | 21.046 | 20.918 | 19.645 | 19.633 | none | none |
-| E3 | 7.691 | 22.985 | 22.187 | 14.671 | 14.258 | none | none |
-
-The gate reference is that event’s fully tuned **main search** score (which itself may sample the optional measurement metadata), not the strict probe score, so no probe came within 0.5 pp and no strategy was expanded further (probe budget ≤2 recipes per family per strategy). Probe results were still eligible as individual candidates: E1’s ridge family best uses `measurement_experts` and comes from the probe trace (`strategy_screen`). E3’s selected pipeline also carries `measurement_onehot=true`, but that flag was sampled by the main pooled search, so it is metadata provenance, not evidence that the bounded one-hot probe won. All choices were made on inner scores; no outer result was used to choose a strategy. Every expert fit excludes the entire held-out event (all six measurements), and a missing expert is a recorded failure, never a silent global fallback.
-
-## 8. Search effort and pruning
-
-| outer | trials | ok | failed | screen | tune | ablation | retune | seed conf | strategy probes |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| E1 | 148 | 140 | 8 | 52 | 43 | 11 | 16 | 2 | 24 |
-| E2 | 127 | 117 | 10 | 59 | 30 | 12 | 0 | 2 | 24 |
-| E3 | 122 | 114 | 8 | 49 | 37 | 10 | 0 | 2 | 24 |
-
-- **E1** — evaluated 11 one-axis variants; configured cap 12; retune: retuned catboost parameters only for up to 16 proposals; seeds: confirmed ['catboost', 'extra_trees'] with fixed offsets [0,1,2]; strategy: pooled reference 6.0145 pp; eligible []; expanded []; per-strategy rec
-- **E2** — evaluated 12 one-axis variants; configured cap 12; retune: not run: ablation gain 0.1041 pp < 0.5000 pp; seeds: confirmed ['random_forest', 'extra_trees'] with fixed offsets [0,1,2]; strategy: pooled reference 14.5183 pp; eligible []; expanded []; per-strategy re
-- **E3** — evaluated 10 one-axis variants; configured cap 12; retune: not run: ablation gain 0.0449 pp < 0.5000 pp; seeds: confirmed ['catboost', 'extra_trees'] with fixed offsets [0,1,2]; strategy: pooled reference 7.6905 pp; eligible []; expanded []; per-strategy rec
-
-Recorded failure reasons (never scored): ElasticNet/Huber objective did not converge; SVR solver terminated early (max_iter=20000); lbfgs failed to converge (max_iter=500).
-
-Three invalid-recipe rejections (relative/variance without the sensors group) were counted as invalid, not fits. The legacy quick presets were evaluated descriptively only (7 presets, recorded under `legacy_controls`, never in selection state).
-
-## 8b. Constant references and per-role breakdown (series track, descriptive)
-
-Both constant references are evaluated under the same protocol and are **OOF equal-event**
-numbers, not inner scores: `mean` **30.376297 pp** and `median` **30.150404 pp** (MAE) versus
-the selected baseline **12.008249 pp**. The gap is large and consistent across the three events
-(mean: 29.144 / 31.276 / 30.709 pp; median: 26.654 / 31.956 / 31.841 pp).
-
-Per-measurement-role MAE of the chosen primary predictions (pp):
-
-| role | E1 | E2 | E3 | equal-event average |
+| evento | n | escolha | escore interno | MAE |
 | --- | --- | --- | --- | --- |
-| HSS radial (pos. 1) | 10.937 | 11.648 | 11.103 | 11.22892 |
-| HSS axial (pos. 2) | 13.065 | 12.368 | 11.942 | 12.45826 |
-| IMS (pos. 3) | 10.107 | 13.779 | 12.274 | 12.05344 |
-| LSS (pos. 4) | 9.541 | 12.117 | 11.894 | 11.18403 |
-| Planetaria 0° (pos. 5) | 12.228 | 14.914 | 10.215 | 12.45212 |
-| Planetaria 90° (pos. 6) | 12.280 | 14.316 | 11.422 | 12.67271 |
+| E1 | 426 | catboost | 0.063198 | 0.113597 |
+| E2 | 198 | random_forest | 0.144370 | 0.131902 |
+| E3 | 198 | hist_gb | 0.076905 | 0.114749 |
 
-A secondary **physical 4-component** view (HSS = mean of positions 1–2, IMS = 3, LSS = 4,
-Planetaria = mean of 5–6) uses **different weights from the primary metric** (components are
-equally weighted within an event rather than the six roles) and is therefore reported only as a
-complement: HSS 11.844, IMS 12.053, LSS 11.184, Planetaria 12.562 pp (equal-event). No winner is
-chosen from this view, and it is never compared with outer-fold selection.
+| evento | n | MAE | RMSE (por Falha) | viés |
+| --- | --- | --- | --- | --- |
+| E1 | 426 | 0.113597 | 0.152413 | -0.040067 |
+| E2 | 198 | 0.131902 | 0.178201 | 0.120077 |
+| E3 | 198 | 0.114749 | 0.160873 | -0.030218 |
+| **média igual por evento** | 822 | **0.120082** | **0.163829** | **0.016597** |
 
-## 9. Joint event track (137 aligned event timestamps)
+Pooled sobre 822 endpoints: MAE **0.118283**, RMSE
+**0.161872**, viés **0.000880**.
 
-Six measurement blocks per event timestamp, strict Date/target/phase alignment, no filling; 71 rows for E1 and 33 each for E2/E3 (137 total). This track is **not** pooled with the 822 series records: one event row is one synchronized timestamp, and `Falha` carries the event id (one component per event).
+MAE por papel de medição (média das séries daquele papel no evento retido):
 
-| outer | n | macro MAE pp | macro RMSE pp | macro bias pp | chosen | inner pp |
+| papel | E1 | E2 | E3 | média igual por evento |
+| --- | --- | --- | --- | --- |
+| HSS radial | 0.109366 | 0.116475 | 0.111026 | 0.112289 |
+| HSS axial | 0.130652 | 0.123676 | 0.119420 | 0.124583 |
+| IMS | 0.101069 | 0.137790 | 0.122745 | 0.120534 |
+| LSS | 0.095414 | 0.121165 | 0.118941 | 0.111840 |
+| Planetaria 0° | 0.122275 | 0.149142 | 0.102146 | 0.124521 |
+| Planetaria 90° | 0.122802 | 0.143162 | 0.114217 | 0.126727 |
+
+Visão secundária por componente físico, com **pesos diferentes** da métrica principal (média das
+posições dentro do componente, não as seis posições equiponderadas); serve apenas como complemento
+e não escolhe vencedor:
+
+| componente | E1 | E2 | E3 | média igual por evento |
+| --- | --- | --- | --- | --- |
+| HSS | 0.120009 | 0.120076 | 0.115223 | 0.118436 |
+| IMS | 0.101069 | 0.137790 | 0.122745 | 0.120534 |
+| LSS | 0.095414 | 0.121165 | 0.118941 | 0.111840 |
+| Planetaria | 0.122539 | 0.146152 | 0.108181 | 0.125624 |
+
+Referências constantes no mesmo protocolo: `mean` **0.303763** e
+`median` **0.301504**, contra
+**0.120082** do seletor.
+
+Recortes por fase, proximidade do fim de vida e limites das previsões (séries):
+
+| evento | MAE saudável | MAE pós-FPT | MAE y≤0.2 (n) | raw finitas | raw fora | pós fora |
 | --- | --- | --- | --- | --- | --- | --- |
-| E1 | 71 | 23.106 | 34.850 | 20.715 | ridge | 16.815 |
-| E2 | 33 | 12.777 | 18.603 | 10.779 | ensemble | 18.656 |
-| E3 | 33 | 16.969 | 22.870 | -14.362 | ensemble | 11.117 |
-| **equal-event average** | 137 | **17.617** | **25.441** | **5.711** | — | — |
+| E1 | 0.049796 | 0.169002 | 0.290419 (24) | 426/426 | 6/426 | 0/426 |
+| E2 | 0.014812 | 0.208010 | 0.332646 (30) | 198/198 | 0/198 | 0/198 |
+| E3 | 0.015346 | 0.164451 | 0.187181 (36) | 198/198 | 0/198 | 0/198 |
 
-Joint pooled point (137 rows): MAE 19.139 pp, RMSE 28.962 pp, bias 9.872 pp.
+## 4. Trilha de eventos sincronizados: resultados
 
-## 10. Aggregation track (mean/median of the six series predictions per event)
+48 colunas de sinal por timestamp, um alvo por evento, sem preenchimentos. Esta trilha **não** é
+comparável registro a registro com a trilha por série (frames de disponibilidade diferentes).
 
-The combination rule (mean vs median) was selected on inner OOF only; the outer application uses the same rule on the same six primary per-series predictions.
+| evento | n timestamps | escolha | escore interno | MAE |
+| --- | --- | --- | --- | --- |
+| E1 | 71 | ridge | 0.168155 | 0.231055 |
+| E2 | 33 | ensemble (extra_trees+hist_gb+ridge, median) | 0.186562 | 0.127770 |
+| E3 | 33 | ensemble (extra_trees+ridge+hist_gb, median) | 0.111171 | 0.169686 |
 
-| outer | chosen how | inner pp (mean / median) | n | macro MAE pp | macro RMSE pp | macro bias pp |
-| --- | --- | --- | --- | --- | --- | --- |
-| E1 | median | 6.011 / 5.825 | 71 | 9.545 | 12.661 | -3.568 |
-| E2 | mean | 13.680 / 14.414 | 33 | 13.175 | 17.643 | 12.008 |
-| E3 | median | 7.607 / 7.452 | 33 | 10.994 | 15.404 | -3.564 |
-| **equal-event average** | — | — | 137 | **11.238** | **15.236** | **1.625** |
+| evento | n | MAE | RMSE | viés |
+| --- | --- | --- | --- | --- |
+| E1 | 71 | 0.231055 | 0.348500 | 0.207147 |
+| E2 | 33 | 0.127770 | 0.186027 | 0.107790 |
+| E3 | 33 | 0.169686 | 0.228703 | -0.143621 |
+| **média igual por evento** | 137 | **0.176170** | **0.254410** | **0.057106** |
 
-Aggregation pooled point (137 rows): MAE 10.768 pp, RMSE 14.670 pp, bias 0.185 pp. This is the same 137 timestamps as §9 with a different input, so the two tables must not be merged or ranked against the 822-row series table.
+Pooled sobre 137 timestamps: MAE **0.191394**, RMSE
+**0.289616**, viés **0.098723**.
 
-## 11. Predeclared time/cadence-only control (untuned, 5 families)
+## 5. Trilha agregada (média/mediana das seis séries)
 
-Config `results/baselines/gearbox/controls/config_cadence_elapsed_only.json`, declared before any outer result was read: every recipe choice pinned to its default except `feature_groups=cadence+elapsed`; families mean/median/Ridge(α=1)/ExtraTrees(128, unlimited depth, leaf 1, `max_features=1.0`)/HistGB(100 iters, leaf 10, 15 leaves, lr 0.1, L2 1, absolute_error, no early stopping); one screening trial, no tuning/ablations/ensembles/legacy presets; `gearbox_strategies.screening=["pooled_anonymous"]`; specialist probes capped at 1 recipe with no expansion; separate output root. The ExtraTrees member is required because the joint event track only searches the declared specialist families — it is a fixed compatibility reference, never a test-derived choice. **This control has 5 families vs the generator control’s 4**, so the two controls are not machine-identical references.
+A regra de agregação (média ou mediana das seis predições por timestamp) foi escolhida na validação
+interna e aplicada igualmente no conjunto externo:
 
-| track | macro MAE pp | macro RMSE pp | macro bias pp | pooled MAE pp | n |
+| evento | regra | MAE | RMSE | viés |
+| --- | --- | --- | --- | --- |
+| E1 | median | 0.095454 | 0.126608 | -0.035684 |
+| E2 | mean | 0.131747 | 0.176431 | 0.120077 |
+| E3 | median | 0.109937 | 0.154043 | -0.035640 |
+| **média igual por evento** | — | **0.112379** | **0.152361** | **0.016251** |
+
+Pooled sobre 137 timestamps: MAE **0.107685**, RMSE
+**0.146701**, viés **0.001845**. É o mesmo
+conjunto de timestamps da seção anterior com outra entrada; as duas tabelas não devem ser fundidas
+nem ranqueadas contra a tabela de 822 endpoints.
+
+## 6. Sondagens de estratégia
+
+| evento | referência pooled ajustada | pooled anônimo (sonda) | + one-hot | especialistas por componente | especialistas por medição |
 | --- | --- | --- | --- | --- | --- |
-| series (822) | 17.519 | 22.841 | -0.367 | 17.219 | 822 |
-| joint event (137) | 18.201 | 26.663 | 5.797 | 19.097 | 137 |
-| aggregation (137) | 13.840 | 17.590 | -1.804 | 11.960 | 137 |
+| E1 | 0.060145 | 0.183026 | 0.183026 | 0.174101 | 0.166859 |
+| E2 | 0.145183 | 0.210457 | 0.209178 | 0.196454 | 0.196329 |
+| E3 | 0.076905 | 0.229845 | 0.221873 | 0.146707 | 0.142581 |
 
-| outer | control chosen | inner pp | series macro MAE pp |
+Nenhuma sonda alcançou ganho ≥ 0.005 sobre a referência ajustada, então nenhuma estratégia foi
+expandida.
+
+## 7. Estabilidade
+
+MAEs de validação interna das 3 sementes fixas por família. “OOF médio” é o escore da candidata
+com predições internas médias entre sementes, não a média dos três escores; a semente mais
+favorável nunca é escolhida.
+
+| evento | família | escores por semente (internos) | média | desvio | OOF médio da média |
+| --- | --- | --- | --- | --- | --- |
+| E1 | extra_trees | 0.124509, 0.125583, 0.124631 | 0.124908 | 0.000480 | 0.124918 |
+| E1 | catboost | 0.060145, 0.072758, 0.062746 | 0.065216 | 0.005437 | 0.063198 |
+| E2 | extra_trees | 0.174655, 0.174984, 0.172528 | 0.174056 | 0.001088 | 0.173902 |
+| E2 | random_forest | 0.145183, 0.144208, 0.143878 | 0.144423 | 0.000554 | 0.144370 |
+| E3 | extra_trees | 0.142581, 0.149165, 0.144681 | 0.145476 | 0.002746 | 0.145201 |
+| E3 | catboost | 0.135803, 0.135456, 0.136912 | 0.136057 | 0.000621 | 0.135139 |
+
+Famílias escolhidas: `catboost` (E1), `random_forest` (E2) e `hist_gb` (E3); nenhuma se repete.
+
+## 8. Escores internos por família (série)
+
+| família | E1 | E2 | E3 |
 | --- | --- | --- | --- |
-| E1 | hist_gb | 13.346 | 16.439 |
-| E2 | extra_trees | 20.906 | 18.364 |
-| E3 | extra_trees | 21.626 | 17.752 |
+| mean | 0.31704 | 0.29916 | 0.30179 |
+| median | 0.31012 | 0.29568 | 0.29961 |
+| ridge | 0.19014 | 0.19843 | 0.16578 |
+| elasticnet | 0.15389 | 0.23073 | 0.11561 |
+| huber | 0.25250 | 0.39396 | 0.23541 |
+| svr | 0.18434 | 0.23007 | 0.17911 |
+| knn | — | 0.15336 | 0.15388 |
+| extra_trees | 0.12492 | 0.17390 | 0.14520 |
+| random_forest | 0.14732 | 0.14437 | 0.16585 |
+| hist_gb | 0.13496 | 0.18232 | 0.07690 |
+| catboost | 0.06320 | 0.18003 | 0.13514 |
 
-**Finding: on the gearbox data the searched pipeline had a lower MAE than the fixed time/cadence-only reference on these three events (12.008 pp vs 17.519 pp series macro MAE).** This is the opposite direction of the generator study (searched 26.335 pp vs control 17.877 pp) and a statement about these two pipelines on these three events: recipes, feature spaces, tuning and family sets differ, so it does not establish that sensor features contain information in general, nor that time is causal in either dataset.
+## 9. Controle de tempo e cadência
 
-## 12. Independent recomputation
+Controle pré-declarado com apenas tempo de aquisição e cadência, receitas fixas e sem busca:
+`mean`, `median`, `ridge` (α=1), `extra_trees` (128 árvores, profundidade livre, folha 1,
+`max_features=1.0`) e `hist_gb` (100 iterações, folha 10, 15 folhas, lr 0.1, L2=1, erro absoluto,
+sem parada antecipada). São cinco famílias (uma a mais que o controle do gerador), então os dois
+controles não são referências idênticas.
 
-A separate numpy implementation (per-`Falha` metric, equal averages, then equal event averages) reproduced every stored per-event MAE and signed bias for the series, joint and aggregation tracks to <1e-9, plus the pooled values; stored `rmse_pp` is pointwise and is therefore cross-checked as the pooled-style quantity rather than against macro RMSE. Targets were re-read from `data/Features_gearbox_score_todos_RUL-porcentagem-data.csv`: **822/822 series `y_true` and 137/137 joint `y_true` values match (0 mismatches)**, the three test folds are disjoint and cover exactly 822 unique series endpoints (426/198/198), the joint track has 137 unique ids (71/33/33), and sampled candidate payload hashes match the canonical digest recomputed independently. `verify` (478 PASS, `RESULT: evaluated_complete`) re-checks fingerprints, CSV hash, event exclusion from training groups, payload integrity, coverage and metric reproducibility — a mechanical consistency check, **not** proof that no outer label influenced the inner search; that rests on the code path plus the synthetic permutation regression test.
+| trilha | n | MAE | RMSE | viés |
+| --- | --- | --- | --- | --- |
+| série (822 endpoints) | 822 | 0.175186 | 0.228412 | -0.003670 |
+| eventos (137 timestamps) | 137 | 0.182011 | 0.266630 | 0.057965 |
+| agregada (137 timestamps) | 137 | 0.138397 | 0.175904 | -0.018042 |
 
-## 13. Reproducibility
+| evento | escolha do controle | MAE (série) |
+| --- | --- | --- |
+| E1 | hist_gb | 0.164393 |
+| E2 | extra_trees | 0.183642 |
+| E3 | extra_trees | 0.177522 |
 
-```
-main search log   results/baselines/gearbox/main_search.log
-main artifacts    results/baselines/gearbox/101e2f1fc3d406b1/{manifest.json,ledger.json,stage_costs.json,outer/[E1-E3]/{selection,trials,evaluation,predictions,candidates},outer/[E1-E3]/event/…,features,fits}
-control config    results/baselines/gearbox/controls/config_cadence_elapsed_only.json
-control artifacts results/baselines/gearbox/controls/gearbox/6932403970ae9c17/…
-report            reports/baselines/gearbox.md (+ reports/baselines/README.md)
-```
+Nestes três eventos, o pipeline buscado teve MAE menor que o controle temporal na trilha por série
+(0.120082 contra
+0.175186). Isso descreve estes dois pipelines neste dataset;
+não isola efeito de uma única mudança nem estabelece informação causal nos sensores.
 
-Re-running `search` on an existing run directory resumes and adds no duplicate fits; `evaluate` refuses to run before a frozen selection exists; `verify` re-validates hashes, payloads and coverage.
+## 10. Limitações
 
-## 14. Limitations
+- Três eventos externos apenas; cada fold interno treina em um único evento. As diferenças entre
+  famílias não são resolvidas por este desenho e não há teste de significância.
+- Frames distintos: 822 endpoints de série, 137 timestamps de evento, 137 linhas agregadas. Nunca
+  são agrupados nem ranqueados entre si.
+- A trilha de eventos descreve operação sincronizada, não todos os timestamps de medição.
+- Erros de regressão bruta não são limitados pelo intervalo do alvo; o recorte 0..1 é
+  pós-processamento e é reportado separadamente das predições brutas.
+- Sem MAPE, receita ótima universal ou afirmação causal.
 
-- Three outer events only; each inner fold trains on a single event, so the design has very little diversity and the ±pp differences between families are not resolved.
-- Sampling frames differ by track: 822 per-series endpoints, 137 joint event timestamps, 137 aggregated rows. They are reported separately and never pooled or ranked against each other.
-- Availability: the joint track only contains timestamps where all six measurements exist with the same target and phase; 0 rows were dropped on this dataset, but the track describes synchronized operation, not every measurement timestamp.
-- No MAPE, significance testing, universal-optimality or causal-sensor claims; no outer-chosen winner is presented as the “best family”.
-- 49 recorded fit failures are not imputed.
+## 11. Reprodutibilidade
 
-## 15. Curvas (artefatos locais, descritivos)
-
-Plots gerados **apenas** das predições OOF congeladas dos runs principal e de controle (nenhum ajuste novo). Eixo x = data do registro, y = RUL em %; preto = alvo, azul = escolha primária por série, laranja = controle tempo/cadência casado por endpoint/data/`Falha`, cinza tracejado = referência fixa `mean`. Nos painéis de evento: preto = alvo, azul = `joint` escolhido, verde pontilhado = agregação das 6 séries (regra escolhida no inner), laranja = agregação do controle — a trilha de 137 timestamps é separada das 822 séries.
-
-Séries (6 painéis por evento, um por papel de medição):
-
-- [gearbox_series_outerE1.png](../../results/baselines/gearbox/101e2f1fc3d406b1/plots/gearbox_series_outerE1.png)
-- [gearbox_series_outerE2.png](../../results/baselines/gearbox/101e2f1fc3d406b1/plots/gearbox_series_outerE2.png)
-- [gearbox_series_outerE3.png](../../results/baselines/gearbox/101e2f1fc3d406b1/plots/gearbox_series_outerE3.png)
-
-Evento (um painel por evento):
-
-- [gearbox_event_outerE1.png](../../results/baselines/gearbox/101e2f1fc3d406b1/plots/gearbox_event_outerE1.png)
-- [gearbox_event_outerE2.png](../../results/baselines/gearbox/101e2f1fc3d406b1/plots/gearbox_event_outerE2.png)
-- [gearbox_event_outerE3.png](../../results/baselines/gearbox/101e2f1fc3d406b1/plots/gearbox_event_outerE3.png)
+- Dataset: `data/Features_gearbox_score_todos_RUL-porcentagem-data.csv`, sha256
+  `332d452bbe2a1c2d4cb4a3b046e5643e386545f0db3cad323dbfd7defdbdd0e4`.
+- Run principal: `results/baselines/gearbox/101e2f1fc3d406b1`; controle:
+  `results/baselines/gearbox/controls/gearbox/6932403970ae9c17` (configuração preservada em
+  `results/baselines/gearbox/controls/`).
+- Versões: Python 3.12.3, numpy 2.5.4, pandas 3.1.1, scikit-learn 1.9.1, optuna 5.0.0,
+  catboost 1.2.10.
+- Curvas descritivas (RUL 0..1): séries por evento
+  [E1](../../results/baselines/gearbox/101e2f1fc3d406b1/plots/gearbox_series_outerE1.png),
+  [E2](../../results/baselines/gearbox/101e2f1fc3d406b1/plots/gearbox_series_outerE2.png),
+  [E3](../../results/baselines/gearbox/101e2f1fc3d406b1/plots/gearbox_series_outerE3.png); eventos sincronizados
+  [E1](../../results/baselines/gearbox/101e2f1fc3d406b1/plots/gearbox_event_outerE1.png),
+  [E2](../../results/baselines/gearbox/101e2f1fc3d406b1/plots/gearbox_event_outerE2.png),
+  [E3](../../results/baselines/gearbox/101e2f1fc3d406b1/plots/gearbox_event_outerE3.png).

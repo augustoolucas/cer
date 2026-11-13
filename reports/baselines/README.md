@@ -1,93 +1,72 @@
-# Baselines locais (gerador e gearbox)
+# Baselines de RUL: gerador e gearbox
 
-Dois estudos exploratórios independentes produzidos pelo runner local `baseline_experiments.py`
-(CPU, sem GPU, sem Colab). Relatórios: `gerador.md` (4 grupos de equipamento A/B/C/D, 574
-endpoints) e `gearbox.md` (3 eventos E1/E2/E3, 822 endpoints provenientes de 18 séries, mais a
-trilha separada de 137 timestamps sincronizados, pertencentes aos mesmos 3 eventos).
+Índice de dois estudos exploratórios de previsão de RUL (0..1) com protocolo comum de validação
+agrupada aninhada:
 
-## Como reproduzir
+- [`gerador.md`](gerador.md) — 574 endpoints em 4 grupos de equipamento (A, B, C, D).
+- [`gearbox.md`](gearbox.md) — 822 endpoints de série (18 séries, 6 papéis, 3 eventos de falha) e
+  um total de 137 timestamps sincronizados nos 3 eventos (71 + 33 + 33).
 
-A ordem importa: **conclua a busca principal e a busca de controle de um dataset antes de rodar
-qualquer `evaluate`**, porque cada `evaluate` exige que as seleções daquele run já estejam
-congeladas fold a fold (ele verifica fold por fold, não “todas as escolhas do projeto”).
+## Resumo
 
-```bash
-# gerador
-venv/bin/python baseline_experiments.py search   --dataset gerador
-venv/bin/python baseline_experiments.py search   --dataset gerador \
-  --config results/baselines/gerador/controls/config_cadence_elapsed_only.json \
-  --output-root results/baselines/gerador/controls
-venv/bin/python baseline_experiments.py evaluate --dataset gerador
-venv/bin/python baseline_experiments.py evaluate --dataset gerador \
-  --config results/baselines/gerador/controls/config_cadence_elapsed_only.json \
-  --output-root results/baselines/gerador/controls
-venv/bin/python baseline_experiments.py verify   --dataset gerador
-venv/bin/python baseline_experiments.py verify   --dataset gerador \
-  --config results/baselines/gerador/controls/config_cadence_elapsed_only.json \
-  --output-root results/baselines/gerador/controls
+Métricas no conjunto externo, em RUL 0..1, com média igual por grupo/evento. “Seleção interna” é o
+pipeline escolhido pela validação interna; “controle tempo/cadência” usa apenas tempo de aquisição
+e cadência, com receitas fixas.
 
-# gearbox (mesmo esquema; controle com 5 famílias)
-venv/bin/python baseline_experiments.py search   --dataset gearbox
-venv/bin/python baseline_experiments.py search   --dataset gearbox \
-  --config results/baselines/gearbox/controls/config_cadence_elapsed_only.json \
-  --output-root results/baselines/gearbox/controls
-venv/bin/python baseline_experiments.py evaluate --dataset gearbox
-venv/bin/python baseline_experiments.py evaluate --dataset gearbox \
-  --config results/baselines/gearbox/controls/config_cadence_elapsed_only.json \
-  --output-root results/baselines/gearbox/controls
-venv/bin/python baseline_experiments.py verify   --dataset gearbox
-venv/bin/python baseline_experiments.py verify   --dataset gearbox \
-  --config results/baselines/gearbox/controls/config_cadence_elapsed_only.json \
-  --output-root results/baselines/gearbox/controls
-```
+| estudo | trilha | seleção interna (MAE / RMSE / viés) | controle (MAE / RMSE / viés) |
+| --- | --- | --- | --- |
+| gerador | 4 grupos | 0.263355 / 0.320903 / 0.107077 | 0.178772 / 0.217910 / 0.034361 |
+| gearbox | série (822 endpoints) | 0.120082 / 0.163829 / 0.016597 | 0.175186 / 0.228412 / -0.003670 |
+| gearbox | eventos (137 timestamps) | 0.176170 / 0.254410 / 0.057106 | 0.182011 / 0.266630 / 0.057965 |
+| gearbox | agregada (137 timestamps) | 0.112379 / 0.152361 / 0.016251 | 0.138397 / 0.175904 / -0.018042 |
 
-Os dois JSONs de controle estão em diretórios **ignorados pelo git**
-(`results/baselines/*/controls/`). A reprodução acima assume que esses arquivos foram
-preservados localmente; eles não fazem parte do commit.
+Referências constantes (OOF, média igual por grupo/evento): gerador `mean`
+0.323418 e `median` 0.339425;
+gearbox `mean` 0.303763 e `median`
+0.301504.
 
-## Código, dados e pré-processamento
+## Método comum
 
-Commit `6e315ee` (hash composto do runner + `cer_rul.py` registrado em cada `manifest.json`).
-Nenhum notebook, CSV ou parâmetro de protocolo foi alterado para produzir os relatórios. A
-limpeza, as features causais e a escolha de alvo vêm de `cer_rul.py`; as features usam apenas o
-histórico observado até cada endpoint.
+- Validação externa leave-one-group-out e interna leave-one-group-out nos grupos restantes;
+  scalers e seleção de atributos ajustados apenas com os identificadores de treino; features de
+  cada endpoint usam só registros até aquele endpoint; escolhas feitas apenas por escore interno e
+  congeladas antes da avaliação de desempenho externo; rótulos externos não participam da
+  seleção nem do ajuste.
+- Features causais: apenas histórico observado até o endpoint; a data entra como tempo decorrido
+  desde o primeiro registro observado; RUL, fase, identificador de grupo e vida útil total nunca
+  são entradas.
+- Escore interno e métricas externas: MAE por componente (`Falha`), média igual entre
+  componentes, depois média igual entre grupos/eventos; “pooled” pondera cada registro e é
+  reportado separadamente.
 
 ## Comparabilidade
 
-Os datasets são independentes: nenhum vencedor do gerador foi transferido para o gearbox, e cada
-fold escolhe sua configuração por validação interna (leave-one-group-out). O “baseline principal”
-é sempre o seletor interno completo, nunca a família que parece melhor no conjunto externo. As
-métricas “macro” atribuem pesos iguais aos grupos/eventos; as “pooled” ponderam cada registro —
-as duas aparecem separadas.
+Os datasets são independentes: nenhuma receita ou hiperparâmetro é transferido entre eles, e o
+baseline principal é sempre o seletor interno, nunca a família que parece melhor no conjunto
+externo.
 
-O controle de tempo/cadência (sem sensores) existe nos dois estudos, mas **não** é o mesmo
-experimento: 4 famílias no gerador, 5 no gearbox (ExtraTrees fixo é necessário porque a trilha de
-eventos só busca famílias especialistas).
+Os controles temporais diferem: 4 famílias no gerador e 5 no gearbox (o `extra_trees` fixo é
+necessário porque a trilha de eventos só buscou famílias especialistas). Portanto os dois
+controles não são referências idênticas, e a diferença entre seleção e controle não isola uma
+única causa.
 
-| estudo | pipeline buscado | controle tempo/cadência |
-| --- | --- | --- |
-| gerador (4 grupos) | 26.335 pp | 17.877 pp |
-| gearbox (3 eventos) | 12.008 pp | 17.519 pp |
+No gearbox, a trilha de 137 timestamps sincronizados não é comparável registro a registro com a
+trilha de 822 endpoints de série: os frames de disponibilidade são diferentes. Nenhuma tabela
+ranqueia um modelo de 8 variáveis contra a entrada de 48 variáveis como se fossem o mesmo
+problema.
 
-## Suposições e limites
+## Limitações gerais
 
-- Gerador tem 4 grupos de equipamento; gearbox tem 3 eventos. A trilha de eventos sincronizados
-  só contém timestamps em que as 6 medições existem com o mesmo alvo e fase; ela é reportada
-  separadamente dos 822 endpoints de série e não deve ser ranqueada contra eles.
-- Features de “tempo decorrido” dependem de uma origem (“primeiro registro observado”) definida
-  de forma consistente, inclusive entre execuções e curadoria do dataset; diferenças de origem
-  funcionam como proxy e não devem ser lidas como efeito causal.
-- Não há testes de significância, MAPE, promessa de receita ótima universal nem afirmação causal
-  sobre sensores.
+- Poucos grupos/eventos (4 e 3): não há teste de significância nem promessa de receita ótima
+  universal.
+- O alvo em 0..1 não limita o erro de regressões brutas; o recorte 0..1 é pós-processamento.
+- Comparações com outros métodos só são interpretáveis com os mesmos grupos e endpoints, as mesmas
+  unidades e scalers ajustados apenas no treino, referências de controle equivalentes, frames de
+  disponibilidade comparáveis e nenhuma feature derivada do RUL histórico.
 
-## Comparações futuras (Timestral e embeddings)
+## Reprodutibilidade
 
-Para uma comparação honesta com uma abordagem temporal ou com embeddings: usar os mesmos grupos
-externos e os mesmos endpoints, as mesmas unidades (pp) e scalers ajustados apenas no treino; manter
-as referências de controle; comparar apenas frames com a mesma disponibilidade (uma medição vs as
-6 sincronizadas); e nunca fornecer RUL histórico como feature. Divergências de MAE descrevem
-pipelines nestes folds, sem inferência de superioridade geral.
-
-## Curvas descritivas
-
-As figuras locais (PNG) de cada estudo estão em `results/baselines/<dataset>/<run>/plots/` e são referenciadas nos relatórios `gerador.md` (§14) e `gearbox.md` (§15); elas são artefatos ignorados pelo git e derivam apenas das predições OOF já congeladas.
+Artefatos de cada estudo ficam em `results/baselines/<dataset>/<run>/` (manifesto, seleções,
+predições OOF e curvas); as configurações de controle estão em
+`results/baselines/<dataset>/controls/`. Curvas descritivas em RUL 0..1 são referenciadas ao final
+de cada relatório.
