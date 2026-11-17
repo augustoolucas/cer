@@ -1,5 +1,7 @@
 venv/
 .venv/
+.venv-chronos/
+.venv-docs/
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -14,3 +16,4 @@ exports/
 cache/
 *.npz
 *.zip
+.opencode/
